@@ -71,7 +71,7 @@ def buildArgs(args):
     generate_args.header_url = []
     for i, header_content in enumerate(headers):
         generate_args.header_url.append(f"vfs://header_url{i}")
-        generate_args.virtual_fs[f"header_url{i}"] = io.StringIO("header_content")
+        generate_args.virtual_fs[f"header_url{i}"] = io.StringIO(header_content)
 
     # Defaults
 
@@ -83,8 +83,8 @@ def buildArgs(args):
     # Options
 
     generate_args.pplux = False
-    generate_args.no_scoped_enums = bool(args.get("no_scoped_enums", False))
-    generate_args.no_fake_scoped_enums = bool(args.get("no_fake_scoped_enums", False))
+    generate_args.use_scoped_enums = bool(args.get("use_scoped_enums", True))
+    generate_args.use_fake_scoped_enums = bool(args.get("use_fake_scoped_enums", True))
     generate_args.use_non_member_procedures = bool(args.get("use_non_member_procedures", False))
 
     return generate_args
