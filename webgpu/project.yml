@@ -1,0 +1,19 @@
+parameters: {}
+environment: {}
+packages:
+    - name: webgpu-cpp
+      shared: false
+      environment: {}
+      parameters: {}
+      annotations: {}
+      functions:
+        - name: generate
+          binary: false
+          main: ""
+          runtime: python:3.11
+          web: true
+          webSecure: false
+          parameters: {}
+          environment: {}
+          annotations: {}
+          limits: {}
