@@ -1,6 +1,7 @@
 import generate
 import argparse
 import io
+import traceback
 
 # ---------------------------------------------
 
@@ -25,7 +26,9 @@ def main(args, context):
         output = getOutput(generate_args)
 
     except QueryException as err:
-        return { "error": err.message, "type": "runtime" }
+        return { "body": { "error": err.message, "type": "runtime" } }
+    except Exception as err:
+        return { "body": { "error": traceback.format_exc(), "type": "unexpected" } }
 
     generate_args_dic = vars(generate_args)
     del generate_args_dic["virtual_fs"]
@@ -71,7 +74,7 @@ def buildArgs(args):
     generate_args.header_url = []
     for i, header_content in enumerate(headers):
         generate_args.header_url.append(f"vfs://header_url{i}")
-        generate_args.virtual_fs[f"header_url{i}"] = io.StringIO(header_content)
+        generate_args.virtual_fs[f"header_url{i}"] = io.StringIO(header_content.replace('\r', ''))
 
     # Defaults
 

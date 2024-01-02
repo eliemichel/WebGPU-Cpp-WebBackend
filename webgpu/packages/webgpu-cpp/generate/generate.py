@@ -91,6 +91,16 @@ def makeArgParser():
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 def main(args):
+    """
+    # Trick to get logging in web service output
+    import io
+    log_capture_string = io.StringIO()
+    ch = logging.StreamHandler(log_capture_string)
+    ch.setLevel(logging.DEBUG)
+    logging.getLogger().addHandler(ch)
+    raise Exception("Debug session in progress!\n" + log_capture_string.getvalue())
+    """
+
     applyDefaultArgs(args)
     template, meta = loadTemplate(args.template)
     api = WebGpuApi()
@@ -341,6 +351,8 @@ def parseClass(name, it):
                 count_properties.append(prop)
             else:
                 api.properties.append(prop)
+        else:
+            logging.warning(f"Could not parse class member '{x}' (while parsing class {name})")
         x = next(it)
 
     for counter in count_properties:
