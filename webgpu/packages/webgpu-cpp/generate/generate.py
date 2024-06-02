@@ -4,7 +4,7 @@
 #   https://github.com/eliemichel/LearnWebGPU
 #
 # MIT License
-# Copyright (c) 2022-2023 Elie Michel
+# Copyright (c) 2022-2024 Elie Michel
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -91,16 +91,6 @@ def makeArgParser():
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 def main(args):
-    """
-    # Trick to get logging in web service output
-    import io
-    log_capture_string = io.StringIO()
-    ch = logging.StreamHandler(log_capture_string)
-    ch.setLevel(logging.DEBUG)
-    logging.getLogger().addHandler(ch)
-    raise Exception("Debug session in progress!\n" + log_capture_string.getvalue())
-    """
-
     applyDefaultArgs(args)
     template, meta = loadTemplate(args.template)
     api = WebGpuApi()
@@ -242,7 +232,7 @@ def parseHeader(api, header):
     struct_re = re.compile(r"struct *WGPU(\w+) *{")
     handle_re = re.compile(r"typedef struct .*WGPU([^_]\w+)\s*;")
     typedef_re = re.compile(r"typedef (\w+) WGPU(\w+)\s*;")
-    procedure_re = re.compile(r"(?:WGPU_EXPORT)?\s+([\w *]+) wgpu(\w+)\((.*)\)\s*;")
+    procedure_re = re.compile(r"(?:WGPU_EXPORT\s+)?([\w *]+) wgpu(\w+)\((.*)\)\s*;")
     enum_re = re.compile(r"typedef enum WGPU(\w+) {")
     flag_enum_re = re.compile(r"typedef WGPUFlags WGPU(\w+)Flags\s*;")
     callback_re = re.compile(r"typedef void \(\*WGPU(\w+)Callback\)\((.*)\)\s*;")
@@ -351,8 +341,6 @@ def parseClass(name, it):
                 count_properties.append(prop)
             else:
                 api.properties.append(prop)
-        else:
-            logging.warning(f"Could not parse class member '{x}' (while parsing class {name})")
         x = next(it)
 
     for counter in count_properties:
@@ -409,6 +397,7 @@ def produceBinding(args, api, meta):
     # Cached variables for format_arg
     handle_names = [ h.name for h in api.handles ]
     handle_cptr_names = [ f"{h.name} const *" for h in api.handles ]
+    handle_ptr_names = [ f"{h.name} *" for h in api.handles ]
     class_cptr_names = [ f"{d.name} const *" for d in api.classes ]
     enum_names = [ e.name for e in api.enumerations ]
     enum_ptr_names = [ f"{e.name} *" for e in api.enumerations ]
@@ -445,6 +434,8 @@ def produceBinding(args, api, meta):
             skip_next = True
         elif arg_type in handle_cptr_names:
             arg_c = f"reinterpret_cast<WGPU{arg_type}>({arg_c})"
+        elif arg_type in handle_ptr_names:
+            arg_c = f"reinterpret_cast<WGPU{arg_type}>({arg_c})"
 
         if args.use_scoped_enums:
             if arg_type in enum_names:
@@ -452,8 +443,6 @@ def produceBinding(args, api, meta):
                 arg_cpp = f"static_cast<{arg_type}>({arg_cpp})"
             elif arg_type in enum_ptr_names:
                 arg_c = f"reinterpret_cast<WGPU{arg_type}>({arg_c})"
-
-        sig_cpp = f"{arg_type} {arg.name}"
 
         return sig_cpp, arg_c, arg_cpp, skip_next
 
@@ -765,6 +754,8 @@ def postProcessDefaults(api):
 
     def getType(path, cls_api):
         name_to_prop = { p.name: p for p in cls_api.properties }
+        if path[0] not in name_to_prop:
+            return None
         prop = name_to_prop[path[0]]
         if len(path) == 1:
             return prop.type
@@ -777,7 +768,8 @@ def postProcessDefaults(api):
             prop.default_value = fixDefaultValue(prop.type, prop.default_value)
         for i, (subprop, default_value) in enumerate(c.default_overrides):
             prop_type = getType(subprop.split('.'), c)
-            c.default_overrides[i] = (subprop, fixDefaultValue(prop_type, default_value))
+            if prop_type is not None:
+                c.default_overrides[i] = (subprop, fixDefaultValue(prop_type, default_value))
 
 # -----------------------------------------------------------------------------
 # Utility functions

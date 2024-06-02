@@ -3,7 +3,7 @@
  *   https://github.com/eliemichel/LearnWebGPU
  *
  * MIT License
- * Copyright (c) 2022 Elie Michel
+ * Copyright (c) 2022-2024 Elie Michel
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -59,6 +59,7 @@ class Type { \
 public: \
 	typedef Type S; /* S == Self */ \
 	typedef WGPU ## Type W; /* W == WGPU Type */ \
+	Type() : m_raw(nullptr) {} \
 	Type(const W& w) : m_raw(w) {} \
 	operator W&() { return m_raw; } \
 	operator const W&() const { return m_raw; } \
@@ -137,6 +138,7 @@ END
 {{end-inject}}
 
 {{begin-blacklist}}
+wgpuDevicePopErrorScope
 {{end-blacklist}}
 
 // Other type aliases
