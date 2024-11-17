@@ -3,7 +3,7 @@
  *   https://github.com/eliemichel/LearnWebGPU
  *
  * MIT License
- * Copyright (c) 2022 Elie Michel
+ * Copyright (c) 2022-2024 Elie Michel
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -126,11 +126,10 @@ class Type { \
 public: \
 	typedef Type S; /* S == Self */ \
 	typedef WGPU ## Type W; /* W == WGPU Type */ \
-	Type(const W& w) : m_raw(w) {} \
-	operator W() { return m_raw; } \
-private: \
-	W m_raw; \
-public:
+	constexpr Type() : m_raw(W{}) {} /* Using default value-initialization */ \
+	constexpr Type(const W& w) : m_raw(w) {} \
+	constexpr operator W() const { return m_raw; } \
+	W m_raw; /* Ideally, this would be private, but then types generated with this macro would not be structural. */
 
 #define ENUM_ENTRY(Name, Value) \
 	static constexpr W Name = (W)Value;
@@ -182,9 +181,14 @@ END
 // Non-member procedures
 {{procedures}}
 
+Instance createInstance();
 Instance createInstance(const InstanceDescriptor& descriptor);
 
 #ifdef WEBGPU_CPP_IMPLEMENTATION
+
+Instance createInstance() {
+	return wgpuCreateInstance(nullptr);
+}
 
 Instance createInstance(const InstanceDescriptor& descriptor) {
 	return wgpuCreateInstance(&descriptor);

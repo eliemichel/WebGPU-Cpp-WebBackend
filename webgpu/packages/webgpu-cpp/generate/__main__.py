@@ -57,7 +57,12 @@ def buildArgs(args):
             "."
         )
 
-    generate_args.template = template + "/webgpu.template.hpp"
+    if template in { "dawn", "wgpu-native" }:
+        # Common template (eventually emscripten will move on to this as well
+        # and we'll remove the dropdown list altogether!)
+        generate_args.template = "webgpu.template.hpp"
+    else:
+        generate_args.template = template + "/webgpu.template.hpp"
 
     # Output
 
@@ -89,6 +94,7 @@ def buildArgs(args):
     generate_args.use_scoped_enums = bool(args.get("use_scoped_enums", True))
     generate_args.use_fake_scoped_enums = bool(args.get("use_fake_scoped_enums", True))
     generate_args.use_non_member_procedures = bool(args.get("use_non_member_procedures", False))
+    generate_args.no_const = bool(args.get("no_const", True))
 
     return generate_args
 

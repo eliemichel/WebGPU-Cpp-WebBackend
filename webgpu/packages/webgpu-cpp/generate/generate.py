@@ -30,7 +30,9 @@
 import re
 from dataclasses import dataclass, field
 from collections import defaultdict
+import os
 from os.path import dirname, isfile, join
+from typing import Dict, List
 import logging
 
 DEFAULT_HEADER_URL = "https://raw.githubusercontent.com/webgpu-native/webgpu-headers/main/webgpu.h"
@@ -45,8 +47,6 @@ def makeArgParser():
     This generates a webgpu.hpp file that you can include in your project.
     Exactly one of your source files must #define WEBGPU_CPP_IMPLEMENTATION
     before including this header.
-
-    TODO: Add some const qualifiers?
     """)
 
     parser.add_argument("-t", "--template", type=str,
@@ -72,9 +72,6 @@ def makeArgParser():
                         default=[],
                         help="File listing default values for descriptor fields. This argument can be provided multiple times, the last ones override the previous values.")
 
-    parser.add_argument("--pplux", action='store_true',
-                        help="Generate a binding compatible with https://github.com/pplux/wgpu.hpp (requires the use of pplux.template.h as the template)")
-
     # Advanced options
 
     parser.add_argument("--no-scoped-enums", action='store_false', dest="use_scoped_enums",
@@ -85,6 +82,9 @@ def makeArgParser():
 
     parser.add_argument("--use-non-member-procedures", action='store_true',
                         help="Include WebGPU methods that are not members of any WebGPU object")
+
+    parser.add_argument("--no-const", action='store_false', dest="use_const",
+                        help="By default, all methods of opaque handle types are const. This option makes them all non-const.")
 
     return parser
 
@@ -99,10 +99,7 @@ def main(args):
         parseHeader(api, header)
     loadDefaults(args, api)
 
-    if args.pplux:
-        binding = producePpluxBinding(api)
-    else:
-        binding = produceBinding(args, api, meta)
+    binding = produceBinding(args, api, meta)
     
     generateOutput(args.output, template, binding)
 
@@ -148,6 +145,7 @@ def isfileVfs(filename):
 
 # -----------------------------------------------------------------------------
 # Parser, for analyzing webgpu.h
+# The output of parsing is a WebGpuApi object
 
 @dataclass
 class PropertyApi:
@@ -235,7 +233,7 @@ def parseHeader(api, header):
     enum_re = re.compile(r"typedef enum WGPU(\w+) {")
     flag_enum_re = re.compile(r"typedef WGPUFlags WGPU(\w+)Flags\s*;")
     new_flag_enum_re = re.compile(r"typedef WGPUFlags WGPU(\w+)\s*;")
-    flag_value_re = re.compile(r"static const WGPU(\w+) WGPU(\w+)_(\w+) = (\w+);")
+    flag_value_re = re.compile(r"static const WGPU(\w+) WGPU(\w+)_(\w+) = (\w+)( /\*(.*)\*/)?;")
     typedef_re = re.compile(r"typedef (\w+) WGPU(\w+)\s*;")
     callback_re = re.compile(r"typedef void \(\*WGPU(\w+)Callback\)\((.*)\)\s*;")
 
@@ -412,8 +410,9 @@ def parseProcArgs(line):
 # -----------------------------------------------------------------------------
 
 def produceBinding(args, api, meta):
-    """Produce binding compatible with PpluX' wgpu.hpp"""
+    """Produce C++ binding"""
     binding = {
+        "webgpu_includes": [],
         "descriptors": [],
         "structs": [],
         "class_impl": [],
@@ -425,6 +424,10 @@ def produceBinding(args, api, meta):
         "procedures": [],
         "type_aliases": []
     }
+
+    for url in args.header_url:
+        filename = os.path.split(url)[1]
+        binding["webgpu_includes"].append(f"#include <webgpu/{filename}>")
 
     # Cached variables for format_arg
     handle_names = [ h.name for h in api.handles ]
@@ -492,12 +495,14 @@ def produceBinding(args, api, meta):
             namespace = "descriptors" if handle_or_class.is_descriptor else "structs"
             namespace_impl = "class_impl"
             argument_self = "*this"
+            use_const = False
         elif entry_type == 'HANDLE':
             binding["handles_decl"].append(f"class {entry_name};")
             macro = "HANDLE"
             namespace = "handles"
             namespace_impl = "handles_impl"
             argument_self = "m_raw"
+            use_const = args.use_const
         
         decls = []
         implems = []
@@ -587,9 +592,10 @@ def produceBinding(args, api, meta):
                     begin_cast = f"static_cast<{return_type}>("
                     end_cast = ")"
             
-            name_and_args = f"{method_name}({', '.join(arguments)})"
-            decls.append(f"\t{maybe_no_discard}{return_type} {name_and_args};\n")
             wrapped_call = f"{begin_cast}wgpu{entry_name}{proc.name}({argument_names_str}){end_cast}"
+            maybe_const = " const" if use_const else ""
+            name_and_args = f"{method_name}({', '.join(arguments)}){maybe_const}"
+            decls.append(f"\t{maybe_no_discard}{return_type} {name_and_args};\n")
             implems.append(
                 f"{return_type} {entry_name}::{name_and_args} {{\n"
                 + body.replace("{wrapped_call}", wrapped_call)
@@ -623,7 +629,9 @@ def produceBinding(args, api, meta):
 
                             wrapped_call = f"wgpu{entry_name}{proc.name}({alt_argument_names_str})"
 
-                            name_and_args = f"{method_name}({', '.join(alt_arguments)})"
+                            maybe_const = " const" if use_const else ""
+
+                            name_and_args = f"{method_name}({', '.join(alt_arguments)}){maybe_const}"
                             decls.append(f"\t{return_type} {name_and_args};\n")
                             implems.append(
                                 f"{return_type} {entry_name}::{name_and_args} {{\n"
@@ -642,7 +650,9 @@ def produceBinding(args, api, meta):
 
                     wrapped_call = f"{begin_cast}wgpu{entry_name}{proc.name}({alt_argument_names_str}){end_cast}"
 
-                    name_and_args = f"{method_name}({', '.join(alt_arguments)})"
+                    maybe_const = " const" if use_const else ""
+
+                    name_and_args = f"{method_name}({', '.join(alt_arguments)}){maybe_const}"
                     decls.append(f"\t{return_type} {name_and_args};\n")
                     implems.append(
                         f"{return_type} {entry_name}::{name_and_args} {{\n"
@@ -650,7 +660,8 @@ def produceBinding(args, api, meta):
                         + "}\n"
                     )
 
-        injected_decls = meta["injected-decls"].get(entry_name, [])
+        injected_decls = meta["injected-decls"].members.get(entry_name, [])
+        macro = meta["injected-decls"].macro_override.get(entry_name, macro)
 
         binding[namespace].append(
             f"{macro}({entry_name})\n"
@@ -851,24 +862,37 @@ def loadTemplate(path):
         "blacklist": blacklist,
     }
 
+@dataclass
+class InjectedData():
+    # Extra members to insert, for each type
+    members: Dict[str,List[str]]
+
+    # Replacement for the HANDLE/STRUCT/etc macro used for this definition
+    # (used to replace STRUCT by STRUCT_NO_OSTREAM)
+    macro_override: Dict[str,str]
+
 def parseTemplateInjection(text):
     it = iter(text.split("\n"))
     
-    injected_data = defaultdict(list)
+    injected_data = InjectedData(
+        members = defaultdict(list),
+        macro_override = {},
+    )
 
-    begin_re = re.compile(r"^(HANDLE|DESCRIPTOR|STRUCT)\((\w+)\)")
+    begin_re = re.compile(r"^(HANDLE|DESCRIPTOR|STRUCT|STRUCT_NO_OSTREAM)\((\w+)\)")
     end_re = re.compile(r"^END")
     current_category = None
 
     while (line := next(it, None)) is not None:
         if (match := begin_re.search(line)):
             current_category = match.group(2)
+            injected_data.macro_override[current_category] = match.group(1)
 
         elif (match := end_re.search(line)):
             current_category = None
 
         elif current_category is not None:
-            injected_data[current_category].append(line + "\n")
+            injected_data.members[current_category].append(line + "\n")
 
     return injected_data
 
@@ -904,41 +928,6 @@ def format_enum_value(value):
         return '_' + value
     else:
         return value
-
-# -----------------------------------------------------------------------------
-# Extension reproducing PpluX binding
-
-def producePpluxClass(api):
-    if api.parent is not None:
-        out = f"    SUBCLASS({api.name}, {api.parent})\n"
-    elif api.is_descriptor:
-        out = f"    DESCRIPTOR({api.name})\n"
-    else:
-        out = f"    CLASS({api.name})\n"
-
-    for prop in api.properties:
-        if prop.counter is None:
-            out += f"        PROP({prop.name})\n"
-        else:
-            out += f"        LIST({prop.name},{prop.counter})\n"
-    out += "    END\n\n"
-    return out
-
-def producePpluxBinding(api):
-    """Produce binding compatible with PpluX' wgpu.hpp"""
-    result = ""
-    for cls_api in api.classes:
-        cls_result = producePpluxClass(cls_api)
-        result += cls_result
-
-    typedefs = ""
-    for handle_api in api.handles:
-        typedefs += f"    typedef WGPU{handle_api.name} {handle_api.name};\n"
-
-    return { "content": typedefs + "\n" + result }
-
-def unzip(l):
-    return tuple(map(list, zip(*l)))
 
 # -----------------------------------------------------------------------------
 
