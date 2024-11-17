@@ -94,7 +94,7 @@ def buildArgs(args):
     generate_args.use_scoped_enums = bool(args.get("use_scoped_enums", True))
     generate_args.use_fake_scoped_enums = bool(args.get("use_fake_scoped_enums", True))
     generate_args.use_non_member_procedures = bool(args.get("use_non_member_procedures", False))
-    generate_args.no_const = bool(args.get("no_const", True))
+    generate_args.use_const = bool(args.get("use_const", True))
 
     return generate_args
 
