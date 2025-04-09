@@ -64,6 +64,13 @@ def buildArgs(args):
     else:
         generate_args.template = template + "/webgpu.template.hpp"
 
+    # Process
+
+    process = args.get("process", "webgpu-hpp")
+
+    if process == "webgpu-raii-hpp":
+        generate_args.template = "webgpu-raii.template.hpp"
+
     # Output
 
     generate_args.output = "vfs://output"
@@ -90,11 +97,16 @@ def buildArgs(args):
 
     # Options
 
+    default_use_init_macros = process == "webgpu-hpp" and template == "dawn"
+
     generate_args.pplux = False
     generate_args.use_scoped_enums = bool(args.get("use_scoped_enums", True))
     generate_args.use_fake_scoped_enums = bool(args.get("use_fake_scoped_enums", True))
     generate_args.use_non_member_procedures = bool(args.get("use_non_member_procedures", False))
     generate_args.use_const = bool(args.get("use_const", True))
+    generate_args.use_init_macros = bool(args.get("use_init_macros", default_use_init_macros))
+    generate_args.use_inline = bool(args.get("use_inline", False))
+    generate_args.ext_suffix = ""
 
     return generate_args
 

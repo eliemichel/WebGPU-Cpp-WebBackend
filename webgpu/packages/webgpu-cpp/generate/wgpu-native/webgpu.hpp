@@ -41,6 +41,7 @@
 #include <vector>
 #include <functional>
 #include <cassert>
+#include <cmath>
 #include <memory>
 
 #if __EMSCRIPTEN__
@@ -64,6 +65,8 @@
 #    define NO_DISCARD
 #  endif
 #endif
+
+
 
 /**
  * A namespace providing a more C++ idiomatic API to WebGPU.
@@ -121,7 +124,7 @@ public:
 
 #define STRUCT(Type) \
 STRUCT_NO_OSTREAM(Type) \
-	friend auto operator<<(std::ostream &stream, const S& self) -> std::ostream & { \
+	friend auto operator<<(std::ostream &stream, const S&) -> std::ostream & { \
 		return stream << "<wgpu::" << #Type << ">"; \
 	} \
 public:
@@ -1386,7 +1389,6 @@ HANDLE(Device)
 	AdapterInfo getAdapterInfo() const;
 	void getFeatures(SupportedFeatures * features) const;
 	Status getLimits(Limits * limits) const;
-	Future getLostFuture() const;
 	Queue getQueue() const;
 	Bool hasFeature(FeatureName feature) const;
 	Future popErrorScope(PopErrorScopeCallbackInfo callbackInfo) const;
@@ -1466,6 +1468,7 @@ HANDLE(RenderBundleEncoder)
 	void setVertexBuffer(uint32_t slot, Buffer buffer, uint64_t offset, uint64_t size) const;
 	void addRef() const;
 	void release() const;
+	void setPushConstants(ShaderStage stages, uint32_t offset, uint32_t sizeBytes, void const * data) const;
 END
 
 HANDLE(RenderPassEncoder)
@@ -1799,6 +1802,7 @@ void PrimitiveState::setDefault() {
 	stripIndexFormat = IndexFormat::Undefined;
 	frontFace = FrontFace::CCW;
 	cullMode = CullMode::None;
+	unclippedDepth = false;
 }
 
 
@@ -1844,8 +1848,10 @@ void RenderPassDepthStencilAttachment::setDefault() {
 
 // Methods of RenderPassMaxDrawCount
 void RenderPassMaxDrawCount::setDefault() {
+	maxDrawCount = 50000000;
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::RenderPassMaxDrawCount;
+	chain.next = nullptr;
 }
 
 
@@ -1893,6 +1899,7 @@ void ShaderModuleDescriptor::setDefault() {
 void ShaderSourceSPIRV::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::ShaderSourceSPIRV;
+	chain.next = nullptr;
 }
 
 
@@ -1901,6 +1908,7 @@ void ShaderSourceWGSL::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	((StringView*)&code)->setDefault();
 	chain.sType = SType::ShaderSourceWGSL;
+	chain.next = nullptr;
 }
 
 
@@ -1962,6 +1970,7 @@ void SurfaceDescriptor::setDefault() {
 void SurfaceSourceAndroidNativeWindow::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::SurfaceSourceAndroidNativeWindow;
+	chain.next = nullptr;
 }
 
 
@@ -1969,6 +1978,7 @@ void SurfaceSourceAndroidNativeWindow::setDefault() {
 void SurfaceSourceMetalLayer::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::SurfaceSourceMetalLayer;
+	chain.next = nullptr;
 }
 
 
@@ -1976,6 +1986,7 @@ void SurfaceSourceMetalLayer::setDefault() {
 void SurfaceSourceWaylandSurface::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::SurfaceSourceWaylandSurface;
+	chain.next = nullptr;
 }
 
 
@@ -1983,6 +1994,7 @@ void SurfaceSourceWaylandSurface::setDefault() {
 void SurfaceSourceWindowsHWND::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::SurfaceSourceWindowsHWND;
+	chain.next = nullptr;
 }
 
 
@@ -1990,6 +2002,7 @@ void SurfaceSourceWindowsHWND::setDefault() {
 void SurfaceSourceXCBWindow::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::SurfaceSourceXCBWindow;
+	chain.next = nullptr;
 }
 
 
@@ -1997,6 +2010,7 @@ void SurfaceSourceXCBWindow::setDefault() {
 void SurfaceSourceXlibWindow::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = SType::SurfaceSourceXlibWindow;
+	chain.next = nullptr;
 }
 
 
@@ -2129,7 +2143,8 @@ void TexelCopyBufferInfo::setDefault() {
 
 // Methods of TexelCopyTextureInfo
 void TexelCopyTextureInfo::setDefault() {
-	aspect = TextureAspect::Undefined;
+	mipLevel = 0;
+	aspect = TextureAspect::All;
 	((Origin3D*)&origin)->setDefault();
 }
 
@@ -2204,6 +2219,7 @@ void InstanceExtras::setDefault() {
 	((StringView*)&dxilPath)->setDefault();
 	((StringView*)&dxcPath)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::InstanceExtras;
+	chain.next = nullptr;
 }
 
 
@@ -2212,6 +2228,7 @@ void DeviceExtras::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	((StringView*)&tracePath)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::DeviceExtras;
+	chain.next = nullptr;
 }
 
 
@@ -2219,6 +2236,7 @@ void DeviceExtras::setDefault() {
 void NativeLimits::setDefault() {
 	((ChainedStructOut*)&chain)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::NativeLimits;
+	chain.next = nullptr;
 }
 
 
@@ -2231,6 +2249,7 @@ void PushConstantRange::setDefault() {
 void PipelineLayoutExtras::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::PipelineLayoutExtras;
+	chain.next = nullptr;
 }
 
 
@@ -2246,6 +2265,7 @@ void ShaderModuleGLSLDescriptor::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	((StringView*)&code)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::ShaderModuleGLSLDescriptor;
+	chain.next = nullptr;
 }
 
 
@@ -2298,6 +2318,7 @@ void InstanceEnumerateAdapterOptions::setDefault() {
 void BindGroupEntryExtras::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::BindGroupEntryExtras;
+	chain.next = nullptr;
 }
 
 
@@ -2305,6 +2326,7 @@ void BindGroupEntryExtras::setDefault() {
 void BindGroupLayoutEntryExtras::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::BindGroupLayoutEntryExtras;
+	chain.next = nullptr;
 }
 
 
@@ -2312,6 +2334,7 @@ void BindGroupLayoutEntryExtras::setDefault() {
 void QuerySetDescriptorExtras::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::QuerySetDescriptorExtras;
+	chain.next = nullptr;
 }
 
 
@@ -2319,6 +2342,7 @@ void QuerySetDescriptorExtras::setDefault() {
 void SurfaceConfigurationExtras::setDefault() {
 	((ChainedStruct*)&chain)->setDefault();
 	chain.sType = (WGPUSType)NativeSType::SurfaceConfigurationExtras;
+	chain.next = nullptr;
 }
 
 
@@ -2605,9 +2629,6 @@ void Device::getFeatures(SupportedFeatures * features) const {
 Status Device::getLimits(Limits * limits) const {
 	return static_cast<Status>(wgpuDeviceGetLimits(m_raw, limits));
 }
-Future Device::getLostFuture() const {
-	return wgpuDeviceGetLostFuture(m_raw);
-}
 Queue Device::getQueue() const {
 	return wgpuDeviceGetQueue(m_raw);
 }
@@ -2805,6 +2826,9 @@ void RenderBundleEncoder::addRef() const {
 }
 void RenderBundleEncoder::release() const {
 	return wgpuRenderBundleEncoderRelease(m_raw);
+}
+void RenderBundleEncoder::setPushConstants(ShaderStage stages, uint32_t offset, uint32_t sizeBytes, void const * data) const {
+	return wgpuRenderBundleEncoderSetPushConstants(m_raw, static_cast<WGPUShaderStage>(stages), offset, sizeBytes, data);
 }
 
 

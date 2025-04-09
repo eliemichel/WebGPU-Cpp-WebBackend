@@ -65,6 +65,8 @@
 #  endif
 #endif
 
+{{init_macro_fixes}}
+
 /**
  * A namespace providing a more C++ idiomatic API to WebGPU.
  */
@@ -157,26 +159,14 @@ END
 STRUCT(Origin3D)
 	Origin3D(uint32_t x, uint32_t y, uint32_t z) : WGPUOrigin3D{ x, y, z } {}
 END
-{{end-inject}}
-
-// Temporarily define this until emscripten adopts WGPUStringView
-struct StringView {
-public:
-	typedef StringView S;
-	typedef const char* W;
-	StringView() : m_raw(nullptr) {}
-	StringView(const W &other) : m_raw(other) {}
-	StringView(const DefaultFlag &) : m_raw(nullptr) {}
-	StringView(const std::string_view& cpp) : m_raw(cpp.data()) {}
-	StringView& operator=(const DefaultFlag &) { m_raw = nullptr; return *this; }
+STRUCT_NO_OSTREAM(StringView)
+	StringView(const std::string_view& cpp) : WGPUStringView{ cpp.data(), cpp.length() } {}
 	operator std::string_view() const;
-	operator W() const { return m_raw; }
 	friend auto operator<<(std::ostream& stream, const S& self) -> std::ostream& {
 		return stream << std::string_view(self);
 	}
-private:
-	W m_raw;
-};
+END
+{{end-inject}}
 
 {{begin-blacklist}}
 wgpuDeviceGetLostFuture
@@ -230,19 +220,27 @@ Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
 	};
 	Context context;
 
-	auto h = requestAdapter{{ext_suffix}}(options, [&context](
-		RequestAdapterStatus status,
-		Adapter adapter,
-		const char* message
+	RequestAdapterCallbackInfo{{ext_suffix}} callbackInfo;
+	callbackInfo.nextInChain = nullptr;
+	callbackInfo.userdata1 = &context;
+	callbackInfo.callback = [](
+		WGPURequestAdapterStatus status,
+		WGPUAdapter adapter,
+		WGPUStringView message,
+		void* userdata1,
+		[[maybe_unused]] void* userdata2
 	) {
+		Context& context = *reinterpret_cast<Context*>(userdata1);
 		if (status == RequestAdapterStatus::Success) {
 			context.adapter = adapter;
 		}
 		else {
-			std::cout << "Could not get WebGPU adapter: " << message << std::endl;
+			std::cout << "Could not get WebGPU adapter: " << StringView(message) << std::endl;
 		}
 		context.requestEnded = true;
-	});
+	};
+	callbackInfo.mode = CallbackMode::AllowSpontaneous;
+	requestAdapter{{ext_suffix}}(options, callbackInfo);
 
 #if __EMSCRIPTEN__
 	while (!context.requestEnded) {
@@ -261,19 +259,27 @@ Device Adapter::requestDevice(const DeviceDescriptor& descriptor) {
 	};
 	Context context;
 
-	auto h = requestDevice{{ext_suffix}}(descriptor, [&context](
-		RequestDeviceStatus status,
-		Device device,
-		const char* message
+	RequestDeviceCallbackInfo{{ext_suffix}} callbackInfo;
+	callbackInfo.nextInChain = nullptr;
+	callbackInfo.userdata1 = &context;
+	callbackInfo.callback = [](
+		WGPURequestDeviceStatus status,
+		WGPUDevice device,
+		WGPUStringView message,
+		void* userdata1,
+		[[maybe_unused]] void* userdata2
 	) {
+		Context& context = *reinterpret_cast<Context*>(userdata1);
 		if (status == RequestDeviceStatus::Success) {
 			context.device = device;
 		}
 		else {
-			std::cout << "Could not get WebGPU device: " << message << std::endl;
+			std::cout << "Could not get WebGPU device: " << StringView(message) << std::endl;
 		}
 		context.requestEnded = true;
-	});
+	};
+	callbackInfo.mode = CallbackMode::AllowSpontaneous;
+	requestDevice{{ext_suffix}}(descriptor, callbackInfo);
 
 #if __EMSCRIPTEN__
 	while (!context.requestEnded) {
@@ -286,7 +292,10 @@ Device Adapter::requestDevice(const DeviceDescriptor& descriptor) {
 }
 
 StringView::operator std::string_view() const {
-	return std::string_view(m_raw);
+	return
+		length == WGPU_STRLEN
+		? std::string_view(data)
+		: std::string_view(data, length);
 }
 
 #endif // WEBGPU_CPP_IMPLEMENTATION

@@ -70,7 +70,18 @@ def makeArgParser():
 
     parser.add_argument("-d", "--defaults", action='append',
                         default=[],
-                        help="File listing default values for descriptor fields. This argument can be provided multiple times, the last ones override the previous values.")
+                        help="""
+                        File listing default values for descriptor fields. This argument can
+                        be provided multiple times, the last ones override the previous values.
+                        """)
+
+    parser.add_argument("--ext-suffix",
+                        default="",
+                        help="""
+                        Extension number needed for Dawn, which uses them to maintain backward
+                        compatibility of their API (might get removed once version 1 is out).
+                        Set to "2" when using dawn and leave to the empty default with wgpu-native.
+                        """)
 
     # Advanced options
 
@@ -85,6 +96,12 @@ def makeArgParser():
 
     parser.add_argument("--no-const", action='store_false', dest="use_const",
                         help="By default, all methods of opaque handle types are const. This option makes them all non-const.")
+
+    parser.add_argument("--use-init-macros", action='store_true',
+                        help="Use initialization macros provided by webgpu.h instead of writing custom setDefaults methods.")
+
+    parser.add_argument("--use-inline", action='store_true', dest="use_inline",
+                        help="Make all methods inlined (seems to have an effect with clang, but MSVC fails at linking in that case).")
 
     return parser
 
@@ -212,6 +229,7 @@ class WebGpuApi:
     callbacks: list[CallbackApi] = field(default_factory=list)
     type_aliases: list[TypeAliasApi] = field(default_factory=list)
     stypes: dict[str,str] = field(default_factory=dict) # Name => SType::Name
+    init_macros: list[str] = field(default_factory=list)
 
 def parseHeader(api, header):
     """
@@ -236,6 +254,7 @@ def parseHeader(api, header):
     flag_value_re = re.compile(r"static const WGPU(\w+) WGPU(\w+)_(\w+) = (\w+)( /\*(.*)\*/)?;")
     typedef_re = re.compile(r"typedef (\w+) WGPU(\w+)\s*;")
     callback_re = re.compile(r"typedef void \(\*WGPU(\w+)Callback\)\((.*)\)\s*;")
+    init_macro_re = re.compile(r"#define (WGPU_[A-Z0-9_]+_INIT)")
 
     while (x := next(it, None)) is not None:
         if (match := struct_re.search(x)):
@@ -312,6 +331,10 @@ def parseHeader(api, header):
                 arguments=parseProcArgs(match.group(2)),
                 raw_arguments=match.group(2),
             ))
+            continue
+
+        if (match := init_macro_re.search(x)):
+            api.init_macros.append(match.group(1))
             continue
 
     # Post process: find parent of each method
@@ -416,18 +439,49 @@ def produceBinding(args, api, meta):
         "descriptors": [],
         "structs": [],
         "class_impl": [],
+        "class_oneliner": [],
         "handles_decl": [],
         "handles": [],
         "handles_impl": [],
+        "handles_oneliner": [],
         "enums": [],
         "callbacks": [],
         "procedures": [],
-        "type_aliases": []
+        "type_aliases": [],
+        "ext_suffix": args.ext_suffix,
+        "init_macro_fixes": [],
     }
 
     for url in args.header_url:
         filename = os.path.split(url)[1]
         binding["webgpu_includes"].append(f"#include <webgpu/{filename}>")
+
+
+    if args.use_init_macros:
+        binding["init_macro_fixes"].append(r"""
+// Fix erroneous initializers from Dawn
+
+#undef WGPU_DAWN_TOGGLES_DESCRIPTOR_INIT
+#define WGPU_DAWN_TOGGLES_DESCRIPTOR_INIT _wgpu_MAKE_INIT_STRUCT(WGPUDawnTogglesDescriptor, { \
+    /*.chain=*/_wgpu_MAKE_INIT_STRUCT(WGPUChainedStruct, { \
+        /*.next=*/NULL _wgpu_COMMA \
+        /*.sType=*/WGPUSType_DawnTogglesDescriptor _wgpu_COMMA \
+    }) _wgpu_COMMA \
+    /*.enabledToggleCount=*/0 _wgpu_COMMA \
+    /*.enabledToggles=*/NULL _wgpu_COMMA \
+    /*.disabledToggleCount=*/0 _wgpu_COMMA \
+    /*.disabledToggles=*/NULL _wgpu_COMMA \
+})
+#undef WGPU_DAWN_WGSL_BLOCKLIST_INIT
+#define WGPU_DAWN_WGSL_BLOCKLIST_INIT _wgpu_MAKE_INIT_STRUCT(WGPUDawnWGSLBlocklist, { \
+    /*.chain=*/_wgpu_MAKE_INIT_STRUCT(WGPUChainedStruct, { \
+        /*.next=*/NULL _wgpu_COMMA \
+        /*.sType=*/WGPUSType_DawnWGSLBlocklist _wgpu_COMMA \
+    }) _wgpu_COMMA \
+    /*.blocklistedFeatureCount=*/0 _wgpu_COMMA \
+    /*.blocklistedFeatures=*/NULL _wgpu_COMMA \
+})
+        """.strip())
 
     # Cached variables for format_arg
     handle_names = [ h.name for h in api.handles ]
@@ -483,6 +537,7 @@ def produceBinding(args, api, meta):
 
         return sig_cpp, arg_c, arg_cpp, skip_next
 
+    maybe_inline = "inline " if args.use_inline else ""
     class_names = [f"WGPU{c.name}" for c in api.classes]
     classes_and_handles = (
         [ ('CLASS', cls_api) for cls_api in api.classes ] +
@@ -494,6 +549,7 @@ def produceBinding(args, api, meta):
             macro = "DESCRIPTOR" if handle_or_class.is_descriptor else "STRUCT"
             namespace = "descriptors" if handle_or_class.is_descriptor else "structs"
             namespace_impl = "class_impl"
+            namespace_oneliner = "class_oneliner"
             argument_self = "*this"
             use_const = False
         elif entry_type == 'HANDLE':
@@ -501,40 +557,54 @@ def produceBinding(args, api, meta):
             macro = "HANDLE"
             namespace = "handles"
             namespace_impl = "handles_impl"
+            namespace_oneliner = "handles_oneliner"
             argument_self = "m_raw"
             use_const = args.use_const
+
+        if entry_name.startswith("INTERNAL__"):
+            continue
         
         decls = []
         implems = []
 
         # Auto-generate setDefault
         if entry_type == 'CLASS':
-            decls.append("\tvoid setDefault();\n")
+            decls.append(f"\t{maybe_inline}void setDefault();\n")
 
             cls_api = handle_or_class
             prop_names = [f"{p.name}" for p in cls_api.properties]
 
-            prop_defaults = [
-                f"\t{prop.name} = {prop.default_value};\n"
-                for prop in cls_api.properties
-                if prop.default_value is not None
-            ] + [
-                f"\t(({prop.type[4:]}*)&{prop.name})->setDefault();\n"
-                for prop in cls_api.properties
-                if prop.type in class_names
-            ] + [
-                f"\t{subprop} = {default_value};\n"
-                for subprop, default_value in cls_api.default_overrides
-            ]
+            if args.use_init_macros:
+                init_macro = f"WGPU_{to_constant_case(entry_name)}_INIT"
+                if init_macro not in api.init_macros:
+                    logging.warning(f"Initialization macro '{init_macro}' was not found, falling back to empty initializer '{{}}'.")
+                    init_macro = "{}"
+                prop_defaults = [
+                    f"\t*this = WGPU{entry_name} {init_macro};\n",
+                ]
+            else:
+                prop_defaults = [
+                    f"\t{prop.name} = {prop.default_value};\n"
+                    for prop in cls_api.properties
+                    if prop.default_value is not None
+                ] + [
+                    f"\t(({prop.type[4:]}*)&{prop.name})->setDefault();\n"
+                    for prop in cls_api.properties
+                    if prop.type in class_names
+                ] + [
+                    f"\t{subprop} = {default_value};\n"
+                    for subprop, default_value in cls_api.default_overrides
+                ]
             if "chain" in prop_names:
                 if entry_name in api.stypes:
-                    prop_defaults.append(
-                        f"\tchain.sType = {api.stypes[entry_name]};\n"
-                    )
+                    prop_defaults.extend([
+                        f"\tchain.sType = {api.stypes[entry_name]};\n",
+                        f"\tchain.next = nullptr;\n",
+                    ])
                 else:
                     logging.warning(f"Type {entry_name} starts with a 'chain' field but has no apparent associated SType.")
             implems.append(
-                f"void {entry_name}::setDefault() " + "{\n"
+                f"{maybe_inline}void {entry_name}::setDefault() " + "{\n"
                 + "".join(prop_defaults)
                 + "}\n"
             )
@@ -595,9 +665,9 @@ def produceBinding(args, api, meta):
             wrapped_call = f"{begin_cast}wgpu{entry_name}{proc.name}({argument_names_str}){end_cast}"
             maybe_const = " const" if use_const else ""
             name_and_args = f"{method_name}({', '.join(arguments)}){maybe_const}"
-            decls.append(f"\t{maybe_no_discard}{return_type} {name_and_args};\n")
+            decls.append(f"\t{maybe_inline}{maybe_no_discard}{return_type} {name_and_args};\n")
             implems.append(
-                f"{return_type} {entry_name}::{name_and_args} {{\n"
+                f"{maybe_inline}{return_type} {entry_name}::{name_and_args} {{\n"
                 + body.replace("{wrapped_call}", wrapped_call)
                 + "}\n"
             )
@@ -632,7 +702,7 @@ def produceBinding(args, api, meta):
                             maybe_const = " const" if use_const else ""
 
                             name_and_args = f"{method_name}({', '.join(alt_arguments)}){maybe_const}"
-                            decls.append(f"\t{return_type} {name_and_args};\n")
+                            decls.append(f"\t{maybe_inline}{return_type} {name_and_args};\n")
                             implems.append(
                                 f"{return_type} {entry_name}::{name_and_args} {{\n"
                                 + body.replace("{wrapped_call}", wrapped_call)
@@ -653,9 +723,9 @@ def produceBinding(args, api, meta):
                     maybe_const = " const" if use_const else ""
 
                     name_and_args = f"{method_name}({', '.join(alt_arguments)}){maybe_const}"
-                    decls.append(f"\t{return_type} {name_and_args};\n")
+                    decls.append(f"\t{maybe_inline}{return_type} {name_and_args};\n")
                     implems.append(
-                        f"{return_type} {entry_name}::{name_and_args} {{\n"
+                        f"{maybe_inline}{return_type} {entry_name}::{name_and_args} {{\n"
                         + body.replace("{wrapped_call}", wrapped_call)
                         + "}\n"
                     )
@@ -667,6 +737,10 @@ def produceBinding(args, api, meta):
             f"{macro}({entry_name})\n"
             + "".join(decls + injected_decls)
             + "END\n"
+        )
+
+        binding[namespace_oneliner].append(
+            f"{macro}({entry_name});"
         )
 
         binding[namespace_impl].append(
@@ -929,9 +1003,28 @@ def format_enum_value(value):
     else:
         return value
 
+def to_constant_case(caml_case):
+    naive = ''.join(['_'+c if c.isupper() or c.isnumeric() else c for c in caml_case]).lstrip('_').upper()
+    # We then regroup isolated characters together (because they correspond to acronyms):
+    current_acronym = None
+    tokens = []
+    for tok in naive.split("_"):
+        if len(tok) == 1:
+            if current_acronym is None:
+                current_acronym = ""
+            current_acronym += tok
+        else:
+            if current_acronym is not None:
+                tokens.append(current_acronym)
+            tokens.append(tok)
+            current_acronym = None
+    if current_acronym is not None:
+        tokens.append(current_acronym)
+    return "_".join(tokens)
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    args = makeArgParser().parse_args() 
+    args = makeArgParser().parse_args()
     main(args)
     
