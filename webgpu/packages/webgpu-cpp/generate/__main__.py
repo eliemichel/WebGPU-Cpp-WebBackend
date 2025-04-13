@@ -81,12 +81,18 @@ def buildArgs(args):
     headers = args.get("headers", [])
     if not headers:
         # Prevent fetching official header by default
-        headers = [""]
+        headers = [
+            {
+                "filename": "webgpu.h",
+                "contents": "",
+            },
+        ]
 
     generate_args.header_url = []
-    for i, header_content in enumerate(headers):
-        generate_args.header_url.append(f"vfs://header_url{i}")
-        generate_args.virtual_fs[f"header_url{i}"] = io.StringIO(header_content.replace('\r', ''))
+    for i, header in enumerate(headers):
+        path = f"/header_url{i}/" + header["filename"]
+        generate_args.header_url.append("vfs://" + path)
+        generate_args.virtual_fs[path] = io.StringIO(header["contents"].replace('\r', ''))
 
     # Defaults
 
